@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gemini-in-Gemini IDE Artifact</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, sans-serif;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      height: 100vh;
+      overflow: hidden;
+    }
+    #toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      border-bottom: 1px solid #ddd;
+      background: #f5f5f5;
+      font-size: 13px;
+    }
+    #stack-select {
+      font-size: 13px;
+    }
+    #undo, #redo {
+      padding: 4px 8px;
+      font-size: 12px;
+    }
+    
+    #main {
+      display: flex;
+      flex-direction: row;
+      height: 100%;
+      overflow: hidden;
+    }
+    .pane {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      transition: width 0.3s ease, border-width 0.3s ease;
+    }
+    
+    #editor-pane {
+      width: 40%;
+      border-right: 1px solid #ddd;
+    }
+    #editor-pane.collapsed {
+      width: 0%;
+      border-right-width: 0;
+    }
+    
+    #preview-pane {
+      flex: 1;
+      min-width: 0;
+    }
+    
+    #sidebar {
+      width: 300px;
+      border-left: 1px solid #ddd;
+    }
+    #sidebar.collapsed {
+      width: 0px;
+      border-left-width: 0;
+    }
+    
+    .pane-header {
+      padding: 6px 8px;
+      background: #f5f5f5;
+      font-size: 13px;
+      font-weight: 600;
+      border-bottom: 1px solid #ddd;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      white-space: nowrap;
+    }
+    
+    .header-left, .header-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .icon-btn {
+      background: #eee;
+      border: 1px solid #ccc;
+      padding: 4px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      color: #333;
+    }
+    .icon-btn:hover { background: #e0e0e0; }
+    
+    #code-editor {
+      flex: 1;
+      font-family: Menlo, Consolas, monospace;
+      font-size: 13px;
+      padding: 8px;
+      border: none;
+      outline: none;
+      resize: none;
+      white-space: pre;
+      overflow: auto;
+      background: #fafafa;
+    }
+    #preview-frame {
+      flex: 1;
+      border: none;
+      background: white;
+      width: 100%;
+      height: 100%;
+    }
+    #play-btn {
+      background: #0055aa;
+      color: white;
+      border: none;
+      padding: 4px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: bold;
+      font-size: 12px;
+    }
+    #play-btn:hover {
+      background: #004488;
+    }
+    
+    #sidebar {
+      display: flex;
+      flex-direction: column;
+      background: #fff;
+    }
+    #settings-pane {
+      padding: 8px;
+      font-size: 12px;
+      background: #fafafa;
+      border-bottom: 1px solid #ddd;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      overflow-y: auto;
+      max-height: 40vh;
+    }
+    .setting-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .setting-row input, .setting-row select {
+      font-size: 11px;
+      width: 120px;
+    }
+    .setting-row input[type="range"] {
+      width: 90px;
+    }
+    .range-val {
+      display: inline-block;
+      width: 24px;
+      text-align: right;
+    }
+    
+    #chat-pane {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 8px;
+      box-sizing: border-box;
+      gap: 8px;
+      overflow: hidden;
+    }
+    #chat-log {
+      flex: 1;
+      border: 1px solid #eee;
+      border-radius: 4px;
+      padding: 6px 8px;
+      font-size: 13px;
+      overflow-y: auto;
+      background: #fafafa;
+    }
+    .chat-msg {
+      margin-bottom: 6px;
+      line-height: 1.4;
+    }
+    .chat-msg.user { color: #333; font-weight: 500; }
+    .chat-msg.gemini { color: #0055aa; }
+    .chat-msg.error { color: #d32f2f; }
+    
+    #chat-input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 6px 8px;
+      font-size: 13px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    #chat-send {
+      width: 100%;
+      padding: 6px 10px;
+      font-size: 13px;
+      background: #eee;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    #chat-send:hover {
+      background: #e0e0e0;
+    }
+  </style>
+
+  <!-- DOM-to-canvas for preview snapshots -->
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+</head>
+<body>
+  <div id="toolbar">
+    <label>Stack:
+      <select id="stack-select">
+        <option value="html">HTML</option>
+        <option value="react">React (CSR)</option>
+        <option value="vue">Vue 3 (CSR)</option>
+        <option value="svelte">Svelte (Compiled JS)</option>
+        <option value="python">Python (Pyodide)</option>
+        <option value="generic">Generic JS</option>
+      </select>
+    </label>
+    <button id="undo" disabled>Undo</button>
+    <button id="redo" disabled>Redo</button>
+    <span style="margin-left:auto; opacity:0.7;">Gemini IDE + Pyodide</span>
+  </div>
+
+  <div id="main">
+    <div class="pane" id="editor-pane">
+      <div class="pane-header">
+        <span>Code Editor</span>
+      </div>
+      <textarea id="code-editor" spellcheck="false"></textarea>
+    </div>
+    
+    <div class="pane" id="preview-pane">
+      <div class="pane-header">
+        <div class="header-left">
+          <button class="icon-btn" id="toggle-editor-btn" title="Toggle Code Editor">◀ Code</button>
+          <span>Live Preview / Output</span>
+        </div>
+        <div class="header-right">
+          <button id="play-btn">▶ Run</button>
+          <button class="icon-btn" id="toggle-sidebar-btn" title="Toggle Settings & Chat">Settings ▶</button>
+        </div>
+      </div>
+      <iframe id="preview-frame" sandbox="allow-scripts allow-same-origin"></iframe>
+    </div>
+
+    <div class="pane" id="sidebar">
+      <div class="pane-header">
+        <span>Settings & Parameters</span>
+      </div>
+      <div id="settings-pane">
+        <div class="setting-row">
+          <label>Model:</label>
+          <select id="model-select">
+            <option value="gemini-2.5-flash-preview-09-2025" selected>gemini-2.5-flash-preview</option>
+            <option value="gemini-3.1-pro">gemini-3.1-pro</option>
+            <option value="gemini-3.5-flash">gemini-3.5-flash</option>
+            <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>Thinking:</label>
+          <select id="thinking-level">
+            <option value="Standard">Standard</option>
+            <option value="Extended">Extended</option>
+            <option value="Ultra">Ultra</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <label>API Key:</label>
+          <input type="password" id="api-key" placeholder="Optional (Uses Preview fallback)" />
+        </div>
+        <div class="setting-row">
+          <label>Temp:</label>
+          <div>
+            <input type="range" id="temperature" min="0" max="2" step="0.1" value="1" oninput="document.getElementById('temp-val').innerText=this.value">
+            <span class="range-val" id="temp-val">1</span>
+          </div>
+        </div>
+        <div class="setting-row">
+          <label>Top P:</label>
+          <div>
+            <input type="range" id="top-p" min="0" max="1" step="0.05" value="0.95" oninput="document.getElementById('topp-val').innerText=this.value">
+            <span class="range-val" id="topp-val">0.95</span>
+          </div>
+        </div>
+        <div class="setting-row">
+          <label>Top K:</label>
+          <input type="number" id="top-k" value="64" min="1" max="100">
+        </div>
+        <div class="setting-row">
+          <label>Max Tokens:</label>
+          <input type="number" id="max-tokens" value="8192" min="1">
+        </div>
+      </div>
+
+      <div id="chat-pane">
+        <div class="pane-header" style="padding:0; border:none; background:transparent;">Gemini Chat</div>
+        <div id="chat-log"></div>
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <input id="chat-input" placeholder="Ask Gemini to code..." autocomplete="off" />
+          <button id="chat-send">Send</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <canvas id="preview-canvas" style="display:none;"></canvas>
+
+  <script>
+    const editor = document.getElementById('code-editor');
+    const previewFrame = document.getElementById('preview-frame');
+    const chatLog = document.getElementById('chat-log');
+    const chatInput = document.getElementById('chat-input');
+    const chatSend = document.getElementById('chat-send');
+    const previewCanvas = document.getElementById('preview-canvas');
+    const stackSelect = document.getElementById('stack-select');
+    const undoBtn = document.getElementById('undo');
+    const redoBtn = document.getElementById('redo');
+    const playBtn = document.getElementById('play-btn');
+    const toggleEditorBtn = document.getElementById('toggle-editor-btn');
+    const toggleSidebarBtn = document.getElementById('toggle-sidebar-btn');
+    const editorPane = document.getElementById('editor-pane');
+    const sidebarPane = document.getElementById('sidebar');
+
+    let history = [];
+    let historyIndex = -1;
+    let suppressHistoryPush = false;
+    let previewDebounce = null;
+
+    function pushHistory(code) {
+      if (suppressHistoryPush) return;
+      history = history.slice(0, historyIndex + 1);
+      history.push(code);
+      historyIndex = history.length - 1;
+      updateUndoRedoState();
+    }
+
+    function updateUndoRedoState() {
+      undoBtn.disabled = historyIndex <= 0;
+      redoBtn.disabled = historyIndex >= history.length - 1;
+    }
+
+    undoBtn.addEventListener('click', () => {
+      if (historyIndex > 0) {
+        historyIndex--;
+        applyCodeWithoutHistory(history[historyIndex]);
+      }
+    });
+
+    redoBtn.addEventListener('click', () => {
+      if (historyIndex < history.length - 1) {
+        historyIndex++;
+        applyCodeWithoutHistory(history[historyIndex]);
+      }
+    });
+
+    toggleEditorBtn.addEventListener('click', () => {
+      editorPane.classList.toggle('collapsed');
+      const isCollapsed = editorPane.classList.contains('collapsed');
+      toggleEditorBtn.innerText = isCollapsed ? 'Code ▶' : '◀ Code';
+    });
+
+    toggleSidebarBtn.addEventListener('click', () => {
+      sidebarPane.classList.toggle('collapsed');
+      const isCollapsed = sidebarPane.classList.contains('collapsed');
+      toggleSidebarBtn.innerText = isCollapsed ? '◀ Settings' : 'Settings ▶';
+    });
+
+    function applyCodeWithoutHistory(code) {
+      suppressHistoryPush = true;
+      editor.value = code;
+      renderPreview(code);
+      suppressHistoryPush = false;
+      updateUndoRedoState();
+    }
+
+    // Initial state
+    editor.value = '';
+    renderPreview('');
+
+    // Editor input -> push history & auto-refresh (except for Python, which needs explicit Play to avoid heavy Pyodide reloads on every keystroke)
+    editor.addEventListener('input', () => {
+      const code = editor.value;
+      pushHistory(code);
+      
+      clearTimeout(previewDebounce);
+      if (stackSelect.value !== 'python') {
+        previewDebounce = setTimeout(() => {
+          renderPreview(code);
+        }, 800);
+      }
+    });
+
+    // Play Button -> Force render
+    playBtn.addEventListener('click', () => {
+      renderPreview(editor.value);
+    });
+
+    stackSelect.addEventListener('change', () => {
+      renderPreview(editor.value);
+    });
+
+    function generatePreviewHTML(code, stack) {
+      if (!code.trim()) {
+        return '<!DOCTYPE html><html><body><p style="font-family:system-ui;margin:16px;color:#666;">Preview is empty. Ask Gemini to write some code or type it yourself.</p></body></html>';
+      }
+
+      // Escape code safely for template literal injection where needed
+      const escapedCode = code.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$');
+
+      switch (stack) {
+        case 'react':
+          return `<!DOCTYPE html>
+            <html>
+            <head>
+              <meta charset="UTF-8">
+              <script src="https://unpkg.com/react@18/umd/react.development.js"><\/script>
+              <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"><\/script>
+              <script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script>
+              <style>body { font-family: system-ui; margin: 16px; }</style>
+            </head>
+            <body>
+              <div id="root"></div>
+              <script type="text/babel">
+                ${code}
+              <\/script>
+            </body>
+            </html>`;
+        
+        case 'vue':
+          return `<!DOCTYPE html>
+            <html>
+            <head>
+              <meta charset="UTF-8">
+              <script src="https://unpkg.com/vue@3/dist/vue.global.js"><\/script>
+              <style>body { font-family: system-ui; margin: 16px; }</style>
+            </head>
+            <body>
+              <div id="app"></div>
+              <script>
+                ${code}
+              <\/script>
+            </body>
+            </html>`;
+
+        case 'python':
+          return `<!DOCTYPE html>
+            <html>
+            <head>
+              <meta charset="UTF-8">
+              <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"><\/script>
+              <style>
+                body { margin: 0; background: #1e1e1e; color: #d4d4d4; font-family: monospace; }
+                #out { padding: 16px; white-space: pre-wrap; font-size: 14px; }
+                .sys-msg { color: #569cd6; }
+                .err-msg { color: #f44336; }
+              </style>
+            </head>
+            <body>
+              <div id="out"><span class="sys-msg">Loading Pyodide environment...</span>\n</div>
+              <script>
+                async function run() {
+                  const out = document.getElementById('out');
+                  try {
+                    let pyodide = await loadPyodide();
+                    pyodide.setStdout({ batched: (msg) => { out.appendChild(document.createTextNode(msg + '\\n')); } });
+                    pyodide.setStderr({ batched: (msg) => { out.innerHTML += '<span class="err-msg">' + msg + '</span>\\n'; } });
+                    
+                    out.innerHTML = '<span class="sys-msg">Running code...</span>\\n\\n';
+                    await pyodide.runPythonAsync(\`${escapedCode}\`);
+                  } catch(err) {
+                    out.innerHTML += '\\n<span class="err-msg">' + err + '</span>';
+                  }
+                }
+                run();
+              <\/script>
+            </body>
+            </html>`;
+
+        case 'svelte':
+          // For Svelte, since browser compilation is complex, we treat it as generic module output.
+          return `<!DOCTYPE html>
+            <html>
+            <head>
+              <meta charset="UTF-8">
+              <style>body { font-family: system-ui; margin: 16px; }</style>
+            </head>
+            <body>
+              <div id="app"></div>
+              <script type="module">
+                ${code}
+              <\/script>
+            </body>
+            </html>`;
+
+        case 'html':
+        case 'generic':
+        default:
+          return code; 
+      }
+    }
+
+    function renderPreview(code) {
+      const stack = stackSelect.value;
+      const doc = previewFrame.contentDocument || previewFrame.contentWindow.document;
+      
+      const htmlContent = generatePreviewHTML(code, stack);
+      
+      doc.open();
+      doc.write(htmlContent);
+      doc.close();
+    }
+
+    chatSend.addEventListener('click', onChatSend);
+    chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') onChatSend();
+    });
+
+    async function onChatSend() {
+      const text = chatInput.value.trim();
+      if (!text) return;
+      appendChat('user', text);
+      chatInput.value = '';
+      chatSend.disabled = true;
+
+      const stack = stackSelect.value;
+      const currentCode = editor.value;
+      const pngDataUrl = await captureLowResPreview();
+
+      const payload = {
+        message: text,
+        stack,
+        code: currentCode,
+        previewImage: pngDataUrl
+      };
+
+      try {
+        const result = await callGeminiForCodeEdit(payload);
+
+        if (result.explanation) appendChat('gemini', result.explanation);
+
+        if (!currentCode.trim() && result.stackChoice) {
+          stackSelect.value = result.stackChoice;
+        }
+
+        if (result.updatedCode) {
+          suppressHistoryPush = true;
+          editor.value = result.updatedCode;
+          renderPreview(result.updatedCode);
+          suppressHistoryPush = false;
+          pushHistory(result.updatedCode);
+        }
+      } catch (err) {
+        console.error('Gemini call failed', err);
+        appendChat('error', 'API Error: ' + err.message);
+      } finally {
+        chatSend.disabled = false;
+      }
+    }
+
+    async function captureLowResPreview() {
+      try {
+        const previewDoc = previewFrame.contentDocument || previewFrame.contentWindow.document;
+        const previewBody = previewDoc.body;
+        if (!previewBody) return null;
+
+        const fullCanvas = await html2canvas(previewBody, {
+          width: Math.min(previewBody.scrollWidth, 600),
+          height: Math.min(previewBody.scrollHeight, 600),
+          scale: 1,
+          logging: false,
+          useCORS: true
+        });
+
+        const targetWidth = 256;
+        const targetHeight = Math.round((targetWidth / fullCanvas.width) * fullCanvas.height);
+        
+        if (targetWidth === 0 || targetHeight === 0) return null;
+
+        previewCanvas.width = targetWidth;
+        previewCanvas.height = targetHeight;
+
+        const ctx = previewCanvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, targetWidth, targetHeight);
+        ctx.drawImage(fullCanvas, 0, 0, targetWidth, targetHeight);
+
+        return previewCanvas.toDataURL('image/png');
+      } catch (err) {
+        return null;
+      }
+    }
+
+    function appendChat(role, text) {
+      const div = document.createElement('div');
+      div.className = `chat-msg ${role}`;
+      const prefix = role === 'user' ? 'You:' : (role === 'error' ? 'Error:' : 'Gemini:');
+      div.innerHTML = `<strong>${prefix}</strong> ${text}`;
+      chatLog.appendChild(div);
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
+
+    async function callGeminiForCodeEdit(payload) {
+      const apiKey = document.getElementById('api-key').value.trim();
+      let model = document.getElementById('model-select').value;
+      const thinkingLevel = document.getElementById('thinking-level').value;
+      const temp = parseFloat(document.getElementById('temperature').value);
+      const topP = parseFloat(document.getElementById('top-p').value);
+      const topK = parseInt(document.getElementById('top-k').value, 10);
+      const maxTokens = parseInt(document.getElementById('max-tokens').value, 10);
+
+      // Force preview model fallback if no key is provided
+      if (!apiKey) {
+        model = 'gemini-2.5-flash-preview-09-2025';
+      }
+
+      // FIX: Always append ?key= so that environments like Canvas can properly 
+      // intercept the empty key string and inject the correct runtime API key.
+      let url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+      const systemPrompt = `You are a code-edit assistant in a single-file IDE.
+Rules:
+- Treat the code editor as the single source of truth.
+- Empty editor: choose stackChoice ("html", "react", "vue", "svelte", "python", "generic") and generate full starter code.
+- "react": Code is executed in browser via Babel standalone. Mount your App to document.getElementById('root').
+- "vue": Code is executed in browser via Vue 3 global build. Create app and mount to '#app'.
+- "svelte": Outputs raw Vanilla JS/ES Module that mounts to #app (skip standard build configs).
+- "python": Code runs in Pyodide. Print to stdout.
+- Existing code: Provide the FULL updated code.
+- Output ONLY a valid JSON object matching the requested schema. No markdown formatting.`;
+
+      const userContent = `User message: ${payload.message}\nCurrent stack: ${payload.stack || '(none)'}\nCurrent code:\n${payload.code || '(empty)'}`;
+
+      const imageBase64 = payload.previewImage ? payload.previewImage.split(',')[1] : null;
+
+      const parts = [{ text: userContent }];
+      if (imageBase64) {
+        parts.push({ inlineData: { mimeType: 'image/png', data: imageBase64 } });
+      }
+
+      const requestBody = {
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents: [{ role: 'user', parts: parts }],
+        generationConfig: {
+          temperature: temp,
+          topP: topP,
+          topK: topK,
+          maxOutputTokens: maxTokens,
+          responseMimeType: "application/json",
+          // FIX: Updated schema types to strictly use uppercase strings as required by the API
+          responseSchema: {
+            type: "OBJECT",
+            properties: {
+              explanation: { type: "STRING" },
+              updatedCode: { type: "STRING" },
+              stackChoice: { type: "STRING" }
+            }
+          }
+        }
+      };
+
+      // Add thinking config for newer models (Gemini 3+)
+      if (model.startsWith('gemini-3')) {
+        requestBody.generationConfig.thinkingConfig = {
+          level: thinkingLevel
+        };
+      }
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(()=>({}));
+        throw new Error(errData.error?.message || response.statusText || "Unknown network error");
+      }
+
+      const data = await response.json();
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+
+      let explanation = '', updatedCode = null, stackChoice = null;
+      try {
+        const parsed = JSON.parse(text);
+        explanation = parsed.explanation || '';
+        updatedCode = parsed.updatedCode || null;
+        stackChoice = parsed.stackChoice || null;
+      } catch (err) {
+        throw new Error('Failed to parse JSON response from API.');
+      }
+
+      return { explanation, updatedCode, stackChoice };
+    }
+  </script>
+</body>
+</html>
